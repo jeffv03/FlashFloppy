@@ -73,6 +73,7 @@ static struct drive {
         stk_time_t start;
         struct timer timer;
     } step;
+    uint32_t read_start; /* Ticks past index when current read started */
     struct image *image;
 } drive;
 
@@ -373,7 +374,7 @@ static void rdata_stop(void)
 }
 
 /* Called from user context to start the read stream. */
-static void rdata_start(void)
+static void rdata_start(struct drive *drv)
 {
     IRQ_global_disable();
 
@@ -398,6 +399,10 @@ static void rdata_start(void)
     tim_rdata->egr = TIM_EGR_UG;
     tim_rdata->sr = 0; /* dummy write, gives h/w time to process EGR.UG=1 */
     tim_rdata->cr1 = TIM_CR1_CEN;
+
+    /* Synchronise the index mark. */
+    index.prev_time = stk_now() + drv->read_start / (SYSCLK_MHZ/STK_MHZ);
+    index.prev_time &= STK_MASK;
 
     /* Enable output. */
     if (drive.sel)
@@ -425,10 +430,21 @@ static void floppy_sync_flux(void)
     if (ticks > stk_ms(5)) /* ages to wait; go do other work */
         return;
 
+    /* Index timer is no longer free running. */
+    timer_cancel(&index.timer);
+    index.active = 0;
+    floppy_change_outputs(m(pin_index), O_FALSE);
+
+    ticks = stk_delta(stk_now(), sync_time) - stk_us(1);
     if (ticks > 0)
         delay_ticks(ticks);
     ticks = stk_delta(stk_now(), sync_time); /* XXX */
-    rdata_start();
+    rdata_start(drv);
+
+    if (image_ticks_since_index(drv->image) < drv->read_start)
+        timer_set(&index.timer,
+                  stk_add(index.prev_time, stk_ms(DRIVE_MS_PER_REV)));
+
     printk("Trk %u: sync_ticks=%d\n", drv->image->cur_track, ticks);
 }
 
@@ -483,6 +499,7 @@ static bool_t dma_rd_handle(struct drive *drv)
         read_start_pos *= SYSCLK_MHZ/STK_MHZ;
         if (image_seek_track(drv->image, track, &read_start_pos))
             return TRUE;
+        drv->read_start = read_start_pos;
         read_start_pos /= SYSCLK_MHZ/STK_MHZ;
         /* Set the deadline. */
         sync_time = stk_add(index_time, read_start_pos);
