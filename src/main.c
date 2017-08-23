@@ -147,11 +147,12 @@ static uint8_t lcd_handle_backlight(uint8_t b)
 
 static struct timer button_timer;
 static volatile uint8_t buttons;
-#define B_LEFT 1
-#define B_RIGHT 2
+#define B_LEFT   1
+#define B_RIGHT  2
+#define B_SELECT 4 /* Switch at position JA */
 static void button_timer_fn(void *unused)
 {
-    static uint16_t bl, br;
+    static uint16_t bl, br, bs;
     uint8_t b = 0;
 
     /* We debounce the switches by waiting for them to be pressed continuously 
@@ -166,6 +167,11 @@ static void button_timer_fn(void *unused)
     br |= gpio_read_pin(gpioc, 7);
     if (br == 0)
         b |= B_RIGHT;
+
+    bs <<= 1;
+    bs |= gpio_read_pin(gpioc, 6);
+    if (bs == 0)
+        b |= B_SELECT;
 
     b = lcd_handle_backlight(b);
 
